@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inventree-3mf-qr-label"
+version = "0.1.0"
+description = "InvenTree label-printing plugin that emits a 2-color flat-tile 3MF for 3D-printed QR labels"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "Jeremy", email = "jag@brownout.com" }]
+keywords = ["inventree", "label", "3mf", "qr", "3d printing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Plugins",
+    "Framework :: Django",
+    "Intended Audience :: Manufacturing",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Printing",
+]
+
+dependencies = [
+    "Pillow>=9.0",
+]
+
+[project.optional-dependencies]
+pdf-fallback = ["pdf2image>=1.16"]
+
+[project.urls]
+Homepage = "https://github.com/jag-brownout/inventree-3mf-qr-label"
+Issues = "https://github.com/jag-brownout/inventree-3mf-qr-label/issues"
+
+# This is what tells InvenTree's plugin loader how to discover the plugin.
+[project.entry-points."inventree_plugins"]
+Inventree3MFQRLabel = "inventree_3mf_qr_label.plugin:Inventree3MFQRLabel"
+
+[tool.setuptools.packages.find]
+include = ["inventree_3mf_qr_label*"]
