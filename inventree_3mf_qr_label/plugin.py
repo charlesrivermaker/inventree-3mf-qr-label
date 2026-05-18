@@ -20,18 +20,71 @@ from django.http import JsonResponse
 from plugin import InvenTreePlugin
 from plugin.mixins import LabelPrintingMixin, SettingsMixin
 
-# `LabelOutput` moved between apps across InvenTree versions. Try the modern
-# location first, then fall back to the legacy one.
-try:
-    from report.models import LabelOutput  # InvenTree >= 0.13
-except ImportError:  # pragma: no cover
-    from label.models import LabelOutput  # InvenTree < 0.13
-
 from .mesh import generate_3mf_from_png
 from .version import PLUGIN_VERSION
 
 
 logger = logging.getLogger("inventree")
+
+
+def _create_output(content, user, plugin_slug: str, template_name: str = ""):
+    """Persist a generated file to InvenTree, version-agnostically.
+
+    Returns a tuple ``(output_obj, download_url)``. Tries each known
+    output-model layout until one works:
+
+      1. common.models.DataOutput   (unified output model, current versions)
+      2. report.models.LabelOutput  (post label/report refactor, older)
+      3. label.models.LabelOutput   (legacy, pre-refactor)
+
+    The model API has changed across versions; this function papers over
+    those differences so plugin import never fails for a missing class.
+    """
+    import importlib
+
+    # 1) Modern unified DataOutput
+    try:
+        DataOutput = getattr(importlib.import_module("common.models"), "DataOutput", None)
+    except ImportError:
+        DataOutput = None
+
+    if DataOutput is not None:
+        kwargs = dict(
+            output=content,
+            user=user,
+            output_type="label",
+            plugin=plugin_slug,
+            template_name=template_name or getattr(content, "name", ""),
+            total=1,
+            progress=1,
+            complete=True,
+        )
+        # Drop kwargs the local DataOutput doesn't define (defensive against
+        # field renames between minor versions).
+        field_names = {f.name for f in DataOutput._meta.get_fields()}
+        kwargs = {k: v for k, v in kwargs.items() if k in field_names}
+        out = DataOutput.objects.create(**kwargs)
+        url_attr = "output" if "output" in field_names else "file"
+        file_field = getattr(out, url_attr, None)
+        return out, (file_field.url if file_field else "")
+
+    # 2/3) Legacy LabelOutput
+    for module_path in ("report.models", "label.models"):
+        try:
+            mod = importlib.import_module(module_path)
+        except ImportError:
+            continue
+        LabelOutput = getattr(mod, "LabelOutput", None)
+        if LabelOutput is None:
+            continue
+        out = LabelOutput.objects.create(label=content, user=user)
+        return out, out.label.url
+
+    raise RuntimeError(
+        "inventree-3mf-qr-label: no compatible output model found in this "
+        "InvenTree version (looked for common.models.DataOutput, "
+        "report.models.LabelOutput, label.models.LabelOutput)."
+    )
 
 
 def _slugify(value: str) -> str:
@@ -183,10 +236,15 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
             output_content = ContentFile(buf.getvalue(), name=output_name)
 
         user = getattr(request, "user", None)
-        output = LabelOutput.objects.create(label=output_content, user=user)
+        _output, url = _create_output(
+            content=output_content,
+            user=user,
+            plugin_slug=self.SLUG,
+            template_name=getattr(label, "name", "") or "",
+        )
 
         return JsonResponse({
-            "file": output.label.url,
+            "file": url,
             "success": True,
             "message": f"Generated {len(outputs)} 3MF label(s)",
         })
@@ -231,10 +289,13 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
 
         name = self._item_filename(item) + ".3mf"
         user = kwargs.get("user")
-        return LabelOutput.objects.create(
-            label=ContentFile(data, name=name),
+        output_obj, _url = _create_output(
+            content=ContentFile(data, name=name),
             user=user,
+            plugin_slug=self.SLUG,
+            template_name=name,
         )
+        return output_obj
 
     # ------------------------------------------------------------------ #
     # Helpers
