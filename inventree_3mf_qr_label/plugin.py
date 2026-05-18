@@ -213,14 +213,12 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
                 width_mm, height_mm = template_w, template_h
 
         # Render one 3MF per item. We reuse the mixin's render_to_png so we
-        # don't have to know the inner machinery of label rendering.
+        # don't have to know the inner machinery of label rendering. The
+        # canonical signature is ``render_to_png(template, instance, **kw)``;
+        # older versions used kwarg names ``label`` and ``item``.
         outputs = []
         for item in items:
-            try:
-                png = self.render_to_png(label=label, item=item, **kwargs)
-            except TypeError:
-                # Older signature: render_to_png(item, ...)
-                png = self.render_to_png(item, **kwargs)
+            png = self._render_png_compat(label, item)
 
             data = generate_3mf_from_png(
                 png_image=png,
@@ -361,6 +359,34 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
             if v:
                 return f"InvenTree QR Label - {v}"
         return "InvenTree QR Label"
+
+    def _render_png_compat(self, template, item):
+        """Call the mixin's render_to_png across InvenTree versions.
+
+        Signatures we've seen, in order of preference:
+
+          * render_to_png(template, instance)     (current, positional)
+          * render_to_png(template=, instance=)   (current, by-name)
+          * render_to_png(label=, item=)          (legacy by-name)
+          * render_to_png(item)                   (very old)
+        """
+        attempts = (
+            lambda: self.render_to_png(template, item),
+            lambda: self.render_to_png(template=template, instance=item),
+            lambda: self.render_to_png(label=template, item=item),
+            lambda: self.render_to_png(item),
+        )
+        last_err = None
+        for attempt in attempts:
+            try:
+                return attempt()
+            except TypeError as e:
+                last_err = e
+                continue
+        raise RuntimeError(
+            "inventree-3mf-qr-label: render_to_png could not be invoked "
+            "with any known signature (" + str(last_err) + ")"
+        )
 
     @staticmethod
     def _png_from_pdf(pdf_data):
