@@ -178,18 +178,59 @@ def _mesh_xml(vertices, triangles, indent: str = "        ") -> str:
     )
 
 
+def _concat_meshes(*meshes):
+    """Concatenate multiple (vertices, triangles) mesh pieces into one,
+    offsetting triangle indices so the combined mesh stays valid."""
+    all_v: List = []
+    all_t: List = []
+    for v_list, t_list in meshes:
+        offset = len(all_v)
+        all_v.extend(v_list)
+        all_t.extend((a + offset, b + offset, c + offset) for a, b, c in t_list)
+    return all_v, all_t
+
+
 def _model_xml(
     ink_rects: List[Rect],
     bg_rects: List[Rect],
+    width_mm: float,
+    height_mm: float,
     total_thickness_mm: float,
+    base_thickness_mm: float,
+    raise_height_mm: float,
     ink_name: str,
     bg_name: str,
     title: str,
 ) -> str:
-    z0, z1 = 0.0, total_thickness_mm
+    """Build the model XML with three optional Z bands:
 
-    ink_v, ink_t = _build_mesh(ink_rects, z0, z1)
-    bg_v, bg_t = _build_mesh(bg_rects, z0, z1)
+    * ``[0, base]``           - solid base plate in the background color (skipped
+                                if ``base_thickness_mm == 0``). This is the
+                                "no color change for the first N mm" band.
+    * ``[base, total]``       - the two-color swap region. Ink and background
+                                rectangles both fill this band, tiling the WxH
+                                surface flat.
+    * ``[total, total+raise]``- ink-only band. Where the QR/text pixels are
+                                dark, the ink protrudes above the flat top by
+                                ``raise_height_mm``. Skipped if 0.
+    """
+    z_swap_bot = base_thickness_mm
+    z_swap_top = total_thickness_mm
+    z_ink_top = total_thickness_mm + raise_height_mm
+
+    # Ink object: rectangles from z_swap_bot up to z_ink_top (one piece).
+    ink_v, ink_t = _build_mesh(ink_rects, z_swap_bot, z_ink_top)
+
+    # Background object: swap-region rectangles from z_swap_bot to z_swap_top.
+    bg_pieces = [_build_mesh(bg_rects, z_swap_bot, z_swap_top)]
+
+    # If a base plate is requested, add a single full-WxH box from 0 to base.
+    if base_thickness_mm > 0:
+        bg_pieces.append(
+            _build_mesh([(0.0, 0.0, width_mm, height_mm)], 0.0, base_thickness_mm)
+        )
+
+    bg_v, bg_t = _concat_meshes(*bg_pieces)
 
     ink_mesh = _mesh_xml(ink_v, ink_t)
     bg_mesh = _mesh_xml(bg_v, bg_t)
@@ -225,8 +266,10 @@ def generate_3mf_from_png(
     width_mm: float,
     height_mm: float,
     total_thickness_mm: float = 1.2,
-    module_mm: float = 1.2,
+    module_mm: float = 0.4,
     threshold: int = 128,
+    base_thickness_mm: float = 0.0,
+    raise_height_mm: float = 0.0,
     ink_name: str = "QR Ink (dark)",
     bg_name: str = "Background (light)",
     title: str = "InvenTree QR Label",
@@ -261,6 +304,16 @@ def generate_3mf_from_png(
         raise ValueError("total_thickness_mm must be positive")
     if module_mm <= 0:
         raise ValueError("module_mm must be positive")
+    if base_thickness_mm < 0:
+        raise ValueError("base_thickness_mm must be >= 0")
+    if raise_height_mm < 0:
+        raise ValueError("raise_height_mm must be >= 0")
+    if base_thickness_mm >= total_thickness_mm:
+        raise ValueError(
+            f"base_thickness_mm ({base_thickness_mm}) must be less than "
+            f"total_thickness_mm ({total_thickness_mm}) - the color-swap "
+            "region needs some Z extent."
+        )
 
     cols = max(1, int(round(width_mm / module_mm)))
     rows = max(1, int(round(height_mm / module_mm)))
@@ -276,7 +329,11 @@ def generate_3mf_from_png(
     model_xml = _model_xml(
         ink_rects=ink_rects,
         bg_rects=bg_rects,
+        width_mm=width_mm,
+        height_mm=height_mm,
         total_thickness_mm=total_thickness_mm,
+        base_thickness_mm=base_thickness_mm,
+        raise_height_mm=raise_height_mm,
         ink_name=ink_name,
         bg_name=bg_name,
         title=title,

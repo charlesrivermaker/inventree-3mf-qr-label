@@ -132,18 +132,45 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
         },
         "TOTAL_THICKNESS_MM": {
             "name": "Total thickness (mm)",
-            "description": "Total Z thickness of the flat tile in millimeters.",
+            "description": (
+                "Total Z thickness of the flat tile. The two-color swap "
+                "region spans from BASE_THICKNESS_MM up to this value."
+            ),
             "default": 1.2,
             "validator": [float, lambda v: v > 0],
+        },
+        "BASE_THICKNESS_MM": {
+            "name": "Solid base thickness (mm)",
+            "description": (
+                "Height of a solid, single-color base layer printed before "
+                "any color changes begin. The slicer can print this whole "
+                "band in one filament with no swaps, which dramatically "
+                "speeds up multi-material prints. 0 disables the base. "
+                "Must be < total thickness."
+            ),
+            "default": 0.6,
+            "validator": [float, lambda v: v >= 0],
+        },
+        "RAISE_HEIGHT_MM": {
+            "name": "QR / text raise height (mm)",
+            "description": (
+                "If > 0, the QR/text features protrude this many mm above "
+                "the flat top of the tile, giving a tactile bump and extra "
+                "optical contrast. 0 keeps the top perfectly flat."
+            ),
+            "default": 0.0,
+            "validator": [float, lambda v: v >= 0],
         },
         "MODULE_MM": {
             "name": "Cell size (mm)",
             "description": (
                 "Edge length of one cell of the down-sampled grid in mm. "
-                "Smaller = more detail, larger mesh. 1.2 mm works well for "
-                "QR codes printed at 0.4 mm nozzle."
+                "Smaller = more detail, larger mesh. 0.4 mm is a good default "
+                "for a 0.4 mm nozzle (one cell = one perimeter line). Bump "
+                "down to 0.2 mm if small text or fine QR modules aren't "
+                "rendering cleanly."
             ),
-            "default": 1.2,
+            "default": 0.4,
             "validator": [float, lambda v: v >= 0.1],
         },
         "INK_NAME": {
@@ -201,10 +228,16 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
         width_mm = float(self.get_setting("WIDTH_MM"))
         height_mm = float(self.get_setting("HEIGHT_MM"))
         total_thickness_mm = float(self.get_setting("TOTAL_THICKNESS_MM"))
+        base_thickness_mm = float(self.get_setting("BASE_THICKNESS_MM"))
+        raise_height_mm = float(self.get_setting("RAISE_HEIGHT_MM"))
         module_mm = float(self.get_setting("MODULE_MM"))
         threshold = int(self.get_setting("THRESHOLD"))
         ink_name = self.get_setting("INK_NAME") or "QR Ink"
         bg_name = self.get_setting("BG_NAME") or "Background"
+
+        # Guard against silly configurations: base must leave room for swap.
+        if base_thickness_mm >= total_thickness_mm:
+            base_thickness_mm = max(0.0, total_thickness_mm - 0.2)
 
         if use_label_dim:
             template_w = float(getattr(label, "width", 0) or 0)
@@ -225,6 +258,8 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
                 width_mm=width_mm,
                 height_mm=height_mm,
                 total_thickness_mm=total_thickness_mm,
+                base_thickness_mm=base_thickness_mm,
+                raise_height_mm=raise_height_mm,
                 module_mm=module_mm,
                 threshold=threshold,
                 ink_name=ink_name,
@@ -310,8 +345,12 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
         width_mm = float(kwargs.get("width") or self.get_setting("WIDTH_MM"))
         height_mm = float(kwargs.get("height") or self.get_setting("HEIGHT_MM"))
         total_thickness_mm = float(self.get_setting("TOTAL_THICKNESS_MM"))
+        base_thickness_mm = float(self.get_setting("BASE_THICKNESS_MM"))
+        raise_height_mm = float(self.get_setting("RAISE_HEIGHT_MM"))
         module_mm = float(self.get_setting("MODULE_MM"))
         threshold = int(self.get_setting("THRESHOLD"))
+        if base_thickness_mm >= total_thickness_mm:
+            base_thickness_mm = max(0.0, total_thickness_mm - 0.2)
 
         item = kwargs.get("item_instance")
         data = generate_3mf_from_png(
@@ -319,6 +358,8 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
             width_mm=width_mm,
             height_mm=height_mm,
             total_thickness_mm=total_thickness_mm,
+            base_thickness_mm=base_thickness_mm,
+            raise_height_mm=raise_height_mm,
             module_mm=module_mm,
             threshold=threshold,
             ink_name=self.get_setting("INK_NAME") or "QR Ink",
@@ -351,6 +392,7 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
         return "qr-label"
 
     @staticmethod
+    @staticmethod
     def _label_title(item) -> str:
         if item is None:
             return "InvenTree QR Label"
@@ -361,15 +403,7 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
         return "InvenTree QR Label"
 
     def _render_png_compat(self, template, item):
-        """Call the mixin's render_to_png across InvenTree versions.
-
-        Signatures we've seen, in order of preference:
-
-          * render_to_png(template, instance)     (current, positional)
-          * render_to_png(template=, instance=)   (current, by-name)
-          * render_to_png(label=, item=)          (legacy by-name)
-          * render_to_png(item)                   (very old)
-        """
+        """Call the mixin's render_to_png across InvenTree versions."""
         attempts = (
             lambda: self.render_to_png(template, item),
             lambda: self.render_to_png(template=template, instance=item),
@@ -390,11 +424,7 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
 
     @staticmethod
     def _png_from_pdf(pdf_data):
-        """Best-effort PDF -> PIL.Image fallback. Requires pdf2image+poppler.
-
-        Returns None if conversion is not available; the caller should treat
-        that as a hard error.
-        """
+        """Best-effort PDF -> PIL.Image fallback (needs pdf2image+poppler)."""
         if not pdf_data:
             return None
         try:
@@ -403,6 +433,6 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
             return None
         try:
             pages = convert_from_bytes(pdf_data, dpi=300)
-        except Exception:  # pragma: no cover
+        except Exception:
             return None
         return pages[0] if pages else None

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "inventree-3mf-qr-label"
-version = "0.1.3"
+version = "0.2.0"
 description = "InvenTree label-printing plugin that emits a 2-color flat-tile 3MF for 3D-printed QR labels"
 readme = "README.md"
 license = { file = "LICENSE" }

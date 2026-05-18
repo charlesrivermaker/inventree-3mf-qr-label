@@ -252,3 +252,87 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------
+# Tests for the new geometry options (base thickness, raise height)
+# ---------------------------------------------------------------------------
+
+def test_base_thickness_adds_full_plate():
+    """A base plate occupies the full WxH from z=0 to z=base, in BG color."""
+    img = make_fake_qr(modules=25, scale=8)
+    W, H, T, B = 40.0, 40.0, 1.2, 0.6
+    blob = generate_3mf_from_png(
+        png_image=img, width_mm=W, height_mm=H,
+        total_thickness_mm=T, base_thickness_mm=B, module_mm=1.6,
+    )
+    z = zipfile.ZipFile(io.BytesIO(blob))
+    root = ET.fromstring(z.read('3D/3dmodel.model').decode())
+    # The ink object should span z=[B, T]; bg object should include rectangles
+    # from z=[B, T] PLUS one extra box (the base plate) at z=[0, B].
+    ink_obj, bg_obj = root.findall(f'{NS}resources/{NS}object')
+    ink_verts = ink_obj.findall(f'{NS}mesh/{NS}vertices/{NS}vertex')
+    bg_verts = bg_obj.findall(f'{NS}mesh/{NS}vertices/{NS}vertex')
+    # Ink Z range
+    ink_z = {float(v.get('z')) for v in ink_verts}
+    assert min(ink_z) == B and max(ink_z) == T, ink_z
+    # Bg Z range covers both bands
+    bg_z = {round(float(v.get('z')), 6) for v in bg_verts}
+    assert 0.0 in bg_z and B in bg_z and T in bg_z, bg_z
+    # Total volume = base plate + (ink + bg rects spanning swap region) =
+    #              = W*H*B + W*H*(T - B) = W*H*T
+    total_vol = 0.0
+    for obj in (ink_obj, bg_obj):
+        verts = obj.findall(f'{NS}mesh/{NS}vertices/{NS}vertex')
+        n_boxes = len(verts) // 8
+        for k in range(n_boxes):
+            v0 = verts[k*8]; v6 = verts[k*8+6]
+            x0, y0 = float(v0.get('x')), float(v0.get('y'))
+            x1, y1 = float(v6.get('x')), float(v6.get('y'))
+            z0, z1 = float(v0.get('z')), float(v6.get('z'))
+            total_vol += (x1-x0)*(y1-y0)*(z1-z0)
+    assert abs(total_vol - W*H*T) < 1e-4, (total_vol, W*H*T)
+    print('ok: base_thickness produces a solid plate + flat-top swap region')
+
+
+def test_raise_height_lifts_ink_only():
+    """Ink object extends beyond z=total by raise_height_mm. BG stays flat."""
+    img = make_fake_qr(modules=25, scale=8)
+    W, H, T, R = 40.0, 40.0, 1.2, 0.4
+    blob = generate_3mf_from_png(
+        png_image=img, width_mm=W, height_mm=H,
+        total_thickness_mm=T, raise_height_mm=R, module_mm=1.6,
+    )
+    z = zipfile.ZipFile(io.BytesIO(blob))
+    root = ET.fromstring(z.read('3D/3dmodel.model').decode())
+    ink_obj, bg_obj = root.findall(f'{NS}resources/{NS}object')
+    ink_z = {float(v.get('z')) for v in ink_obj.findall(f'{NS}mesh/{NS}vertices/{NS}vertex')}
+    bg_z  = {float(v.get('z')) for v in bg_obj.findall(f'{NS}mesh/{NS}vertices/{NS}vertex')}
+    assert min(ink_z) == 0.0 and max(ink_z) == T + R, ink_z
+    assert min(bg_z) == 0.0 and max(bg_z) == T, bg_z
+    print('ok: raise_height_mm lifts ink only; bg stays flat')
+
+
+def test_combined_base_and_raise():
+    """Both at once: solid base then color-swap region then raised ink."""
+    img = make_fake_qr(modules=25, scale=8)
+    W, H, T, B, R = 40.0, 40.0, 1.2, 0.6, 0.4
+    blob = generate_3mf_from_png(
+        png_image=img, width_mm=W, height_mm=H,
+        total_thickness_mm=T, base_thickness_mm=B, raise_height_mm=R, module_mm=1.6,
+    )
+    z = zipfile.ZipFile(io.BytesIO(blob))
+    root = ET.fromstring(z.read('3D/3dmodel.model').decode())
+    ink_obj, bg_obj = root.findall(f'{NS}resources/{NS}object')
+    ink_z = sorted({float(v.get('z')) for v in ink_obj.findall(f'{NS}mesh/{NS}vertices/{NS}vertex')})
+    bg_z  = sorted({float(v.get('z')) for v in bg_obj.findall(f'{NS}mesh/{NS}vertices/{NS}vertex')})
+    assert ink_z == [B, T + R], ink_z
+    assert bg_z == [0.0, B, T], bg_z
+    print('ok: base + raise stack correctly')
+
+
+# Append the new tests to main()'s call list
+if __name__ == "__main__":
+    test_base_thickness_adds_full_plate()
+    test_raise_height_lifts_ink_only()
+    test_combined_base_and_raise()
