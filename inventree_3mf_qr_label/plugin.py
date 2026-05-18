@@ -168,12 +168,34 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
     # InvenTree LabelPrintingMixin entry points
     # ------------------------------------------------------------------ #
 
-    def print_labels(self, label, items, request, **kwargs):
+    def print_labels(self, label, *args, **kwargs):
         """Generate one 3MF per item and return a single download URL.
+
+        InvenTree's call signature changed between versions:
+
+          * Modern (>= ~0.16):  ``print_labels(template, output, items, request, **kw)``
+            where ``output`` is a pre-created ``DataOutput`` the plugin
+            populates and saves.
+          * Older:              ``print_labels(template, items, request, **kw)``
+            and the plugin creates its own output record.
+
+        We dispatch on ``len(args)`` so this plugin works on both.
 
         Multiple items are bundled into a ZIP. A single item is delivered as
         a bare .3mf so users can drag it straight into their slicer.
         """
+        # Resolve which calling convention we're seeing.
+        output_obj = None
+        if len(args) >= 3:
+            output_obj, items, request = args[0], args[1], args[2]
+        elif len(args) == 2:
+            items, request = args[0], args[1]
+        else:
+            raise TypeError(
+                f"inventree-3mf-qr-label: print_labels received unexpected "
+                f"args ({len(args)} extra positional); kwargs={list(kwargs)}"
+            )
+
         # Pull settings once.
         use_label_dim = bool(self.get_setting("USE_LABEL_DIMENSIONS"))
         width_mm = float(self.get_setting("WIDTH_MM"))
@@ -236,12 +258,31 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
             output_content = ContentFile(buf.getvalue(), name=output_name)
 
         user = getattr(request, "user", None)
-        _output, url = _create_output(
-            content=output_content,
-            user=user,
-            plugin_slug=self.SLUG,
-            template_name=getattr(label, "name", "") or "",
-        )
+
+        if output_obj is not None:
+            # Modern API: InvenTree pre-created a DataOutput; we populate it.
+            # `FileField.save(..., save=False)` writes the file but defers
+            # the model save so we can update other fields in one go.
+            output_obj.output.save(output_name, output_content, save=False)
+            if hasattr(output_obj, "complete"):
+                output_obj.complete = True
+            if hasattr(output_obj, "progress"):
+                output_obj.progress = getattr(output_obj, "total", None) or len(outputs)
+            if hasattr(output_obj, "plugin") and not getattr(output_obj, "plugin", None):
+                try:
+                    output_obj.plugin = self.SLUG
+                except Exception:
+                    pass
+            output_obj.save()
+            url = output_obj.output.url
+        else:
+            # Legacy API: create our own output record via the helper.
+            _output_obj, url = _create_output(
+                content=output_content,
+                user=user,
+                plugin_slug=self.SLUG,
+                template_name=getattr(label, "name", "") or "",
+            )
 
         return JsonResponse({
             "file": url,
