@@ -37,7 +37,15 @@ from inventree_3mf_qr_label.mesh import (  # noqa: E402
 )
 
 
-NS = "{http://schemas.microsoft.com/3dmanufacturing/core/2013/02}"
+NS = "{http://schemas.microsoft.com/3dmanufacturing/core/2015/02}"
+
+
+def mesh_objects(root):
+    """The two mesh-bearing objects (ink, background), skipping the assembly."""
+    return [
+        o for o in root.findall(f"{NS}resources/{NS}object")
+        if o.find(f"{NS}mesh") is not None
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -140,8 +148,20 @@ def assert_3mf_structure(blob: bytes, width, height, thickness):
     assert root.tag == NS + "model", f"unexpected root: {root.tag}"
     assert root.get("unit") == "millimeter"
 
-    objects = root.findall(f"{NS}resources/{NS}object")
-    assert len(objects) == 2, f"expected 2 objects, got {len(objects)}"
+    objects = mesh_objects(root)
+    assert len(objects) == 2, f"expected 2 mesh objects, got {len(objects)}"
+
+    # A single build item assembles both meshes as parts of one object.
+    items = root.findall(f"{NS}build/{NS}item")
+    assert len(items) == 1, items
+    assembly = [
+        o for o in root.findall(f"{NS}resources/{NS}object")
+        if o.get("id") == items[0].get("objectid")
+    ][0]
+    comps = assembly.findall(f"{NS}components/{NS}component")
+    assert sorted(c.get("objectid") for c in comps) == sorted(
+        o.get("id") for o in objects
+    )
 
     total_vol = 0.0
     for obj in objects:
@@ -242,11 +262,37 @@ def test_nonsquare_label():
     print("ok: 60x30 nonsquare label")
 
 
+def test_orca_filament_assignment():
+    """model_settings.config assigns each part its filament slot."""
+    img = make_fake_qr(modules=25, scale=8)
+    blob = generate_3mf_from_png(
+        png_image=img, width_mm=40.0, height_mm=40.0, module_mm=1.6,
+        ink_name='Ink "A"', bg_name="BG & co", ink_filament=3, bg_filament=4,
+    )
+    z = zipfile.ZipFile(io.BytesIO(blob))
+    root = ET.fromstring(z.read("3D/3dmodel.model").decode())
+    app = [m.text for m in root.findall(f"{NS}metadata") if m.get("name") == "Application"]
+    assert app and app[0].startswith("BambuStudio-"), app
+
+    cfg = ET.fromstring(z.read("Metadata/model_settings.config").decode())
+    obj = cfg.find("object")
+    assert obj.get("id") == root.find(f"{NS}build/{NS}item").get("objectid")
+    parts = {}
+    for part in obj.findall("part"):
+        meta = {m.get("key"): m.get("value") for m in part.findall("metadata")}
+        parts[part.get("id")] = (meta["name"], meta["extruder"])
+    ink_obj, bg_obj = mesh_objects(root)
+    assert parts[ink_obj.get("id")] == ('Ink "A"', "3"), parts
+    assert parts[bg_obj.get("id")] == ("BG & co", "4"), parts
+    print("ok: Orca/Bambu per-part filament assignment")
+
+
 def main():
     test_grid_round_trip()
     test_tiling_simple()
     test_full_pipeline()
     test_nonsquare_label()
+    test_orca_filament_assignment()
     print("all tests passed")
 
 
@@ -270,7 +316,7 @@ def test_base_thickness_adds_full_plate():
     root = ET.fromstring(z.read('3D/3dmodel.model').decode())
     # The ink object should span z=[B, T]; bg object should include rectangles
     # from z=[B, T] PLUS one extra box (the base plate) at z=[0, B].
-    ink_obj, bg_obj = root.findall(f'{NS}resources/{NS}object')
+    ink_obj, bg_obj = mesh_objects(root)
     ink_verts = ink_obj.findall(f'{NS}mesh/{NS}vertices/{NS}vertex')
     bg_verts = bg_obj.findall(f'{NS}mesh/{NS}vertices/{NS}vertex')
     # Ink Z range
@@ -305,7 +351,7 @@ def test_raise_height_lifts_ink_only():
     )
     z = zipfile.ZipFile(io.BytesIO(blob))
     root = ET.fromstring(z.read('3D/3dmodel.model').decode())
-    ink_obj, bg_obj = root.findall(f'{NS}resources/{NS}object')
+    ink_obj, bg_obj = mesh_objects(root)
     ink_z = {float(v.get('z')) for v in ink_obj.findall(f'{NS}mesh/{NS}vertices/{NS}vertex')}
     bg_z  = {float(v.get('z')) for v in bg_obj.findall(f'{NS}mesh/{NS}vertices/{NS}vertex')}
     assert min(ink_z) == 0.0 and max(ink_z) == T + R, ink_z
@@ -323,7 +369,7 @@ def test_combined_base_and_raise():
     )
     z = zipfile.ZipFile(io.BytesIO(blob))
     root = ET.fromstring(z.read('3D/3dmodel.model').decode())
-    ink_obj, bg_obj = root.findall(f'{NS}resources/{NS}object')
+    ink_obj, bg_obj = mesh_objects(root)
     ink_z = sorted({float(v.get('z')) for v in ink_obj.findall(f'{NS}mesh/{NS}vertices/{NS}vertex')})
     bg_z  = sorted({float(v.get('z')) for v in bg_obj.findall(f'{NS}mesh/{NS}vertices/{NS}vertex')})
     assert ink_z == [B, T + R], ink_z

@@ -183,6 +183,26 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
             "description": "Display name for the light/background object in the 3MF.",
             "default": "Background (light)",
         },
+        "INK_FILAMENT": {
+            "name": "Ink filament slot",
+            "description": (
+                "Filament slot (1-based) assigned to the dark/QR part when "
+                "the 3MF is opened in OrcaSlicer, Snapmaker Orca or Bambu "
+                "Studio."
+            ),
+            "default": 2,
+            "validator": [int, lambda v: v >= 1],
+        },
+        "BG_FILAMENT": {
+            "name": "Background filament slot",
+            "description": (
+                "Filament slot (1-based) assigned to the light/background "
+                "part (including the solid base) in OrcaSlicer, Snapmaker "
+                "Orca or Bambu Studio."
+            ),
+            "default": 1,
+            "validator": [int, lambda v: v >= 1],
+        },
         "THRESHOLD": {
             "name": "Black/white threshold (0-255)",
             "description": "Pixels darker than this threshold become QR ink.",
@@ -234,6 +254,8 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
         threshold = int(self.get_setting("THRESHOLD"))
         ink_name = self.get_setting("INK_NAME") or "QR Ink"
         bg_name = self.get_setting("BG_NAME") or "Background"
+        ink_filament = int(self.get_setting("INK_FILAMENT") or 2)
+        bg_filament = int(self.get_setting("BG_FILAMENT") or 1)
 
         # Guard against silly configurations: base must leave room for swap.
         if base_thickness_mm >= total_thickness_mm:
@@ -265,6 +287,8 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
                 ink_name=ink_name,
                 bg_name=bg_name,
                 title=self._label_title(item),
+                ink_filament=ink_filament,
+                bg_filament=bg_filament,
             )
             outputs.append((self._item_filename(item) + ".3mf", data))
             logger.info(
@@ -365,6 +389,8 @@ class Inventree3MFQRLabel(LabelPrintingMixin, SettingsMixin, InvenTreePlugin):
             ink_name=self.get_setting("INK_NAME") or "QR Ink",
             bg_name=self.get_setting("BG_NAME") or "Background",
             title=self._label_title(item),
+            ink_filament=int(self.get_setting("INK_FILAMENT") or 2),
+            bg_filament=int(self.get_setting("BG_FILAMENT") or 1),
         )
 
         name = self._item_filename(item) + ".3mf"

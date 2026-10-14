@@ -1,16 +1,16 @@
 """
 3MF generator for two-color flat-tile QR labels.
 
-The output 3MF contains TWO model objects sharing the same Z range:
+The output 3MF contains ONE object built from TWO parts:
 
-    Object 1 ("ink"):        rectangular prisms covering the dark cells.
-    Object 2 ("background"): rectangular prisms covering the light cells.
+    Part 1 ("ink"):        rectangular prisms covering the dark cells.
+    Part 2 ("background"): rectangular prisms covering the light cells.
 
-Together they tile a perfect WxH rectangle of total_thickness_mm. Slicers
-that allow assigning a different filament/extruder per object will produce a
-flat-top, two-color label with no support, no infill tweaks, and a single
-filament change at the appropriate Z (or per-layer multi-material if the
-user prefers).
+Together they tile a perfect WxH rectangle of total_thickness_mm. The file
+is written in the Bambu Studio project flavour (Metadata/model_settings.config)
+so OrcaSlicer, Snapmaker Orca and Bambu Studio load each part with its
+filament slot already assigned. Other slicers read the standard 3MF core and
+let the user assign filaments per part manually.
 
 The generator is dependency-light: it builds the .model XML by hand and
 zips it with stdlib zipfile, so the only runtime requirement is Pillow.
@@ -34,6 +34,7 @@ CONTENT_TYPES_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
+  <Default Extension="config" ContentType="text/xml"/>
 </Types>
 """
 
@@ -44,7 +45,26 @@ ROOT_RELS_XML = """<?xml version="1.0" encoding="UTF-8"?>
 </Relationships>
 """
 
-MODEL_NS = "http://schemas.microsoft.com/3dmanufacturing/core/2013/02"
+MODEL_NS = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+BAMBU_NS = "http://schemas.bambulab.com/package/2021"
+
+# OrcaSlicer (and forks such as Snapmaker Orca) and Bambu Studio only honour
+# the per-part filament assignments in Metadata/model_settings.config when the
+# model's Application metadata identifies a Bambu-format project. Files from
+# any other application are loaded as "geometry only".
+APPLICATION = "BambuStudio-01.09.00.00"
+
+# Object ids inside 3D/3dmodel.model. The two meshes are separate resources
+# and a third object assembles them as components, so the slicer sees ONE
+# object with two parts that always move together.
+INK_ID = 1
+BG_ID = 2
+LABEL_ID = 3
+
+
+def _attr(value: str) -> str:
+    """Escape a string for use inside a double-quoted XML attribute."""
+    return escape(value, {'"': "&quot;"})
 
 
 # ---------------------------------------------------------------------------
@@ -237,23 +257,73 @@ def _model_xml(
 
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
-        f'<model unit="millimeter" xml:lang="en-US" xmlns="{MODEL_NS}">\n'
+        f'<model unit="millimeter" xml:lang="en-US" xmlns="{MODEL_NS}" '
+        f'xmlns:BambuStudio="{BAMBU_NS}">\n'
+        f'  <metadata name="Application">{APPLICATION}</metadata>\n'
+        '  <metadata name="BambuStudio:3mfVersion">1</metadata>\n'
         f'  <metadata name="Title">{escape(title)}</metadata>\n'
         '  <metadata name="Designer">inventree-3mf-qr-label</metadata>\n'
-        '  <metadata name="Application">InvenTree 3MF QR Label Plugin</metadata>\n'
         '  <resources>\n'
-        f'    <object id="1" type="model" name="{escape(ink_name)}">\n'
+        f'    <object id="{INK_ID}" type="model" name="{_attr(ink_name)}">\n'
         f'{ink_mesh}\n'
         '    </object>\n'
-        f'    <object id="2" type="model" name="{escape(bg_name)}">\n'
+        f'    <object id="{BG_ID}" type="model" name="{_attr(bg_name)}">\n'
         f'{bg_mesh}\n'
+        '    </object>\n'
+        f'    <object id="{LABEL_ID}" type="model" name="{_attr(title)}">\n'
+        '      <components>\n'
+        f'        <component objectid="{INK_ID}"/>\n'
+        f'        <component objectid="{BG_ID}"/>\n'
+        '      </components>\n'
         '    </object>\n'
         '  </resources>\n'
         '  <build>\n'
-        '    <item objectid="1"/>\n'
-        '    <item objectid="2"/>\n'
+        f'    <item objectid="{LABEL_ID}" printable="1"/>\n'
         '  </build>\n'
         '</model>\n'
+    )
+
+
+def _model_settings_xml(
+    ink_name: str,
+    bg_name: str,
+    title: str,
+    ink_filament: int,
+    bg_filament: int,
+) -> str:
+    """Bambu/Orca per-object config: assigns a filament slot to each part.
+
+    The ``extruder`` key is the 1-based filament slot in the slicer's
+    filament list, so the two parts come in already colored.
+    """
+    def part(part_id: int, name: str, filament: int) -> str:
+        return (
+            f'    <part id="{part_id}" subtype="normal_part">\n'
+            f'      <metadata key="name" value="{_attr(name)}"/>\n'
+            '      <metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>\n'
+            f'      <metadata key="extruder" value="{filament}"/>\n'
+            '    </part>\n'
+        )
+
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<config>\n'
+        f'  <object id="{LABEL_ID}">\n'
+        f'    <metadata key="name" value="{_attr(title)}"/>\n'
+        f'    <metadata key="extruder" value="{bg_filament}"/>\n'
+        f'{part(INK_ID, ink_name, ink_filament)}'
+        f'{part(BG_ID, bg_name, bg_filament)}'
+        '  </object>\n'
+        '  <plate>\n'
+        '    <metadata key="plater_id" value="1"/>\n'
+        '    <metadata key="plater_name" value=""/>\n'
+        '    <metadata key="locked" value="false"/>\n'
+        '    <model_instance>\n'
+        f'      <metadata key="object_id" value="{LABEL_ID}"/>\n'
+        '      <metadata key="instance_id" value="0"/>\n'
+        '    </model_instance>\n'
+        '  </plate>\n'
+        '</config>\n'
     )
 
 
@@ -273,6 +343,8 @@ def generate_3mf_from_png(
     ink_name: str = "QR Ink (dark)",
     bg_name: str = "Background (light)",
     title: str = "InvenTree QR Label",
+    ink_filament: int = 2,
+    bg_filament: int = 1,
 ) -> bytes:
     """Convert a rendered InvenTree label PNG into a 2-color flat-tile 3MF.
 
@@ -292,7 +364,10 @@ def generate_3mf_from_png(
     ink_name, bg_name : str
         Display names for the two objects in the 3MF (visible in slicers).
     title : str
-        Title metadata.
+        Title metadata (also the object name in the slicer).
+    ink_filament, bg_filament : int
+        1-based filament slots assigned to the ink and background parts.
+        OrcaSlicer, Snapmaker Orca and Bambu Studio apply these on load.
 
     Returns
     -------
@@ -308,6 +383,8 @@ def generate_3mf_from_png(
         raise ValueError("base_thickness_mm must be >= 0")
     if raise_height_mm < 0:
         raise ValueError("raise_height_mm must be >= 0")
+    if ink_filament < 1 or bg_filament < 1:
+        raise ValueError("ink_filament and bg_filament must be >= 1")
     if base_thickness_mm >= total_thickness_mm:
         raise ValueError(
             f"base_thickness_mm ({base_thickness_mm}) must be less than "
@@ -344,4 +421,14 @@ def generate_3mf_from_png(
         zf.writestr("[Content_Types].xml", CONTENT_TYPES_XML)
         zf.writestr("_rels/.rels", ROOT_RELS_XML)
         zf.writestr("3D/3dmodel.model", model_xml)
+        zf.writestr(
+            "Metadata/model_settings.config",
+            _model_settings_xml(
+                ink_name=ink_name,
+                bg_name=bg_name,
+                title=title,
+                ink_filament=ink_filament,
+                bg_filament=bg_filament,
+            ),
+        )
     return buf.getvalue()

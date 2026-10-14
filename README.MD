@@ -13,26 +13,30 @@ voxelizes the rasterized PNG into a 2-color flat tile.
 +--------------------------------+        +--------------------------------+
 |  InvenTree label template      |  -->   |  Flat 2-color 3MF tile        |
 |  (HTML + qrcode template tag)  |        |  width x height x thickness   |
-|     -> rendered PNG            |        |  Object 1 = QR ink (dark)     |
-+--------------------------------+        |  Object 2 = background        |
+|     -> rendered PNG            |        |  Part 1 = QR ink (dark)       |
++--------------------------------+        |  Part 2 = background          |
                                           +--------------------------------+
 ```
 
 ## What you get
 
-Each printed label produces a single `.3mf` file containing **two model
-objects** sharing the exact same Z range (`0` to `total_thickness`):
+Each printed label produces a single `.3mf` file containing **one object
+made of two parts** sharing the exact same Z range (`0` to `total_thickness`):
 
-| Object name (configurable)  | Geometry                                      |
+| Part name (configurable)    | Geometry                                      |
 | --------------------------- | --------------------------------------------- |
 | `QR Ink (dark)`             | Rectangular prisms covering all dark pixels   |
 | `Background (light)`        | Rectangular prisms covering all light pixels  |
 
-Together the two objects tile a perfect `width x height` rectangle. The top
+Together the two parts tile a perfect `width x height` rectangle. The top
 and bottom faces are flat. Any slicer that lets you assign a different
-filament/extruder per object (Cura, PrusaSlicer, OrcaSlicer, Bambu Studio,
+filament/extruder per part (Cura, PrusaSlicer, OrcaSlicer, Bambu Studio,
 Slic3r, etc.) will produce a flat-top, two-color label with no supports
 required.
+
+The 3MF is written in Bambu Studio project format, so **OrcaSlicer, Snapmaker
+Orca and Bambu Studio open it with each part already assigned to its
+filament slot** (see *Ink filament slot* / *Background filament slot*).
 
 If you print 1 item the plugin returns a bare `.3mf`; multiple items are
 bundled into a single zip for download.
@@ -69,6 +73,8 @@ All settings are exposed under the plugin's settings page in InvenTree:
 | Black/white threshold    | `128`   | 0-255 grayscale cutoff between ink and background    |
 | Ink object name          | "QR Ink (dark)"     | Name shown in the slicer                 |
 | Background object name   | "Background (light)"| Name shown in the slicer                 |
+| Ink filament slot        | `2`     | Filament slot for the ink part (Orca / Bambu)        |
+| Background filament slot | `1`     | Filament slot for the background part (Orca / Bambu) |
 
 A note on **cell size**: this is what controls the resolution of the QR
 modules in the print. For a 0.4 mm nozzle, `1.2 mm` (= 3 perimeters per
@@ -88,13 +94,18 @@ template with only the QR code (no text, no border).
 
 ## Slicer setup
 
-After the print job, drop the `.3mf` into your slicer. You'll see two
-objects with the names you configured. Assign:
+After the print job, drop the `.3mf` into your slicer. You'll see one object
+with two parts named as you configured.
 
-- **Object 1 ("QR Ink")** -> your dark filament (e.g. black)
-- **Object 2 ("Background")** -> your light filament (e.g. white)
+In **OrcaSlicer, Snapmaker Orca or Bambu Studio** the parts are already
+assigned to the configured filament slots -- just load your dark filament in
+the ink slot and your light filament in the background slot. In other
+slicers, assign them by hand:
 
-Slice and print. Because both objects span the full Z range and tile the
+- **Part 1 ("QR Ink")** -> your dark filament (e.g. black)
+- **Part 2 ("Background")** -> your light filament (e.g. white)
+
+Slice and print. Because both parts span the full Z range and tile the
 plate exactly, the slicer will alternate filaments per layer (on
 multi-material printers) or you can use one filament swap at the bottom
 layer if you only own a single-extruder machine -- though for a true
